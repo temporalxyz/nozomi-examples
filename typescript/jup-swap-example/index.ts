@@ -1,4 +1,4 @@
-import { AddressLookupTableAccount, Connection, Keypair, PublicKey, SystemProgram, TransactionMessage, VersionedMessage, VersionedTransaction } from '@solana/web3.js';
+import { AddressLookupTableAccount, Connection, Keypair, PublicKey, SystemProgram, TransactionMessage, VersionedMessage, VersionedTransaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import fetch from 'cross-fetch';
 import { Wallet } from '@coral-xyz/anchor';
 
@@ -6,7 +6,7 @@ const NOZOMI_URL = 'http://ams1.nozomi.temporal.xyz/';
 const NOZOMI_UUID = process.env.NOZOMI_UUID;
 
 // 0.001 SOL
-const NOZOMI_TIP_LAMPORTS = 1000000;
+const NOZOMI_TIP_LAMPORTS = 0.001 * LAMPORTS_PER_SOL;
 const NOZOMI_TIP_ADDRESS = new PublicKey("TEMPaMeCRFAS9EKF53Jd6KpHxgL47uWLcpFArU1Fanq");
 
 async function main() {
@@ -18,13 +18,15 @@ async function main() {
     const wallet = new Wallet(Keypair.fromSecretKey(privateKeyUint8));
 
     // Swapping SOL to USDC with input 0.1 SOL and 0.5% slippage
-    const quoteResponse = await (
-        await fetch('https://quote-api.jup.ag/v6/quote?inputMint=So11111111111111111111111111111111111111112\
-&outputMint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v\
-&amount=10000000\
-&slippageBps=50'
-        )
-    ).json();
+    const params = new URLSearchParams({
+        inputMint: "So11111111111111111111111111111111111111112",
+        outputMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        amount: (0.1 * LAMPORTS_PER_SOL).toString(),
+        // restrict intermediate tokens to only stable liquidity top set, minimizing high slippage risks with minimal pricing impact.
+        restrictIntermediateTokens: 'true',
+        slippageBps: (0.5 * 100).toString()
+    })
+    const quoteResponse = await (await fetch(`https://quote-api.jup.ag/v6/quote?${params}`)).json();
 
     // get serialized transactions for the swap
     const { swapTransaction } = await (
@@ -50,17 +52,14 @@ async function main() {
     const swapTransactionBuf = Buffer.from(swapTransaction, 'base64');
     const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
 
-    // sign the transaction
-    transaction.sign([wallet.payer]);
-
-    // get the latest block hash
-
+    // tip transfer instruction
     let nozomiTipIx = SystemProgram.transfer({
         fromPubkey: wallet.publicKey,
         toPubkey: NOZOMI_TIP_ADDRESS,
         lamports: NOZOMI_TIP_LAMPORTS
     });
 
+    // get the latest block hash
     let blockhash = await connection.getLatestBlockhash();
 
     let message = transaction.message;
@@ -73,6 +72,8 @@ async function main() {
     newMessage.recentBlockhash = blockhash.blockhash;
 
     let newTransaction = new VersionedTransaction(newMessage);
+    
+    // sign the transaction
     newTransaction.sign([wallet.payer]);
 
     // Execute the transaction

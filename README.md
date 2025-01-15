@@ -5,7 +5,9 @@ A collection of practical examples for working with Solana using Nozomi.
 ## Examples Index
 
 ### 1. Typescript Jupiter Swap + Transfer
-[`/src/jupiter-swap`](./src/jupiter-swap)
+[`Implementation`](./typescript/jup-swap-example)
+
+[`Jup OpenAPI documentation`](https://station.jup.ag/api-v6)
 
 Demonstrates how to:
 - Swap SOL to USDC using Jupiter
