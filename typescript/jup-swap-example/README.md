@@ -1,5 +1,3 @@
-
-
 # Nozomi Examples
 
 A collection of examples demonstrating how to use Nozomi for Solana blockchain interactions.
