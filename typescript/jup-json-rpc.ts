@@ -1,8 +1,9 @@
 import { AddressLookupTableAccount, Connection, Keypair, PublicKey, SystemProgram, TransactionMessage, VersionedMessage, VersionedTransaction } from '@solana/web3.js';
 import fetch from 'cross-fetch';
 import { Wallet } from '@coral-xyz/anchor';
+import { bs58 } from '@coral-xyz/anchor/dist/cjs/utils/bytes';
 
-const NOZOMI_URL = 'http://ams1.nozomi.temporal.xyz/';
+const NOZOMI_URL = 'http://ams1.nozomi.temporal.xyz/api/sendTransaction2';
 const NOZOMI_UUID = process.env.NOZOMI_UUID;
 
 // 0.001 SOL
@@ -11,7 +12,6 @@ const NOZOMI_TIP_ADDRESS = new PublicKey("TEMPaMeCRFAS9EKF53Jd6KpHxgL47uWLcpFArU
 
 async function main() {
     const connection = new Connection(process.env.RPC_URL || 'https://api.mainnet-beta.solana.com', "confirmed");
-    const nozomiConnection = new Connection(`${NOZOMI_URL}\?c=${NOZOMI_UUID}`);
     const privateKeyString = process.env.PRIVATE_KEY || '';
     const privateKeyArray = JSON.parse(privateKeyString);
     const privateKeyUint8 = new Uint8Array(privateKeyArray);
@@ -19,32 +19,33 @@ async function main() {
 
     // Swapping SOL to USDC with input 0.1 SOL and 0.5% slippage
     const quoteResponse = await (
-        await fetch('https://quote-api.jup.ag/v6/quote?inputMint=So11111111111111111111111111111111111111112\
+        await fetch('https://lite-api.jup.ag/swap/v1/quote?inputMint=So11111111111111111111111111111111111111112\
 &outputMint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v\
 &amount=10000000\
 &slippageBps=50'
         )
     ).json();
 
-    // get serialized transactions for the swap
-    const { swapTransaction } = await (
-        await fetch('https://quote-api.jup.ag/v6/swap', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                // quoteResponse from /quote api
-                quoteResponse,
-                // user public key to be used for the swap
-                userPublicKey: wallet.publicKey.toString(),
-                // auto wrap and unwrap SOL. default is true
-                wrapAndUnwrapSol: true,
-                // feeAccount is optional. Use if you want to charge a fee.  feeBps must have been passed in /quote API.
-                // feeAccount: "fee_account_public_key"
-            })
+    const swapResponse = await fetch('https://lite-api.jup.ag/swap/v1/swap', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            quoteResponse,
+            userPublicKey: wallet.publicKey.toString(),
+            wrapAndUnwrapSol: true,
+            dynamicComputeUnitLimit: true
         })
-    ).json();
+    });
+
+    // Check response before parsing
+    if (!swapResponse.ok) {
+        const errorText = await swapResponse.text();
+        throw new Error(`Swap API failed with status ${swapResponse.status}: ${errorText}`);
+    }
+
+    const { swapTransaction } = await swapResponse.json();
 
     // deserialize the transaction
     const swapTransactionBuf = Buffer.from(swapTransaction, 'base64');
@@ -54,7 +55,6 @@ async function main() {
     transaction.sign([wallet.payer]);
 
     // get the latest block hash
-
     let nozomiTipIx = SystemProgram.transfer({
         fromPubkey: wallet.publicKey,
         toPubkey: NOZOMI_TIP_ADDRESS,
@@ -75,18 +75,35 @@ async function main() {
     let newTransaction = new VersionedTransaction(newMessage);
     newTransaction.sign([wallet.payer]);
 
-    // Execute the transaction
-    const rawTransaction = newTransaction.serialize()
+    // Execute the transaction using API v2
+    const rawTransaction = newTransaction.serialize();
+    const txnBase64 = Buffer.from(rawTransaction).toString('base64');
+
     let timestart = Date.now();
-    const txid = await nozomiConnection.sendRawTransaction(rawTransaction, {
-        skipPreflight: true,
-        maxRetries: 2
+
+    const response = await fetch(`${NOZOMI_URL}?c=${NOZOMI_UUID}`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'text/plain',
+        },
+        body: txnBase64
     });
 
-    console.log("Nozomi response: txid: %s", txid)
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Transaction failed with status ${response.status}: ${errorText}`);
+    }
 
-    let res = await connection.confirmTransaction({ signature: txid, blockhash: blockhash.blockhash, lastValidBlockHeight: blockhash.lastValidBlockHeight })
-    console.log("Confirmed in: %s seconds", (Date.now() - timestart) / 1000)
+    console.log("Nozomi response: Transaction sent successfully");
+
+    // Confirm using the signature from the transaction
+    const signature = bs58.encode(newTransaction.signatures[0]);
+    let res = await connection.confirmTransaction({
+        signature,
+        blockhash: blockhash.blockhash,
+        lastValidBlockHeight: blockhash.lastValidBlockHeight
+    });
+    console.log("Confirmed in: %s seconds", (Date.now() - timestart) / 1000);
 }
 
 async function loadAddressLookupTablesFromMessage(message: VersionedMessage, connection: Connection) {
